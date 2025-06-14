@@ -3,6 +3,7 @@ using Amazon.DynamoDBv2.DataModel;
 using Amazon.Lambda.Core;
 using Amazon.S3;
 using Amazon.S3.Model;
+using WordList.Common.Logging;
 using WordList.Processing.UploadSourceChunks.Models;
 
 namespace WordList.Processing.UploadSourceChunks;
@@ -14,7 +15,7 @@ public class SourceChunkUploader
     private static readonly AmazonS3Client s_s3 = new();
 
     public string SourceId { get; init; }
-    public ILambdaLogger Logger { get; init; }
+    public ILogger Log { get; init; }
     public int ChunkLineCount { get; set; }
     public bool ReplaceExistingWords { get; init; }
 
@@ -29,18 +30,18 @@ public class SourceChunkUploader
     // Limit max number of uploads.
     private SemaphoreSlim _uploadConcurrencyLimiter = new(3);
 
-    public SourceChunkUploader(string sourceId, bool replaceExistingWords, ILambdaLogger logger)
+    public SourceChunkUploader(string sourceId, bool replaceExistingWords, ILogger logger)
     {
         SourceId = sourceId;
-        Logger = logger;
+        Log = logger;
         ChunkLineCount = 2_500;
         ReplaceExistingWords = replaceExistingWords;
     }
 
-    protected static async Task<string?> GetUrlFromSourceId(string sourceId)
+    protected static async Task<string?> GetUrlFromSourceIdAsync(string sourceId)
     {
         var tableName = Environment.GetEnvironmentVariable("SOURCES_TABLE_NAME");
-        var result = await s_dynamoDb.LoadAsync<Source>(sourceId, new LoadConfig { OverrideTableName = tableName });
+        var result = await s_dynamoDb.LoadAsync<Source>(sourceId, new LoadConfig { OverrideTableName = tableName }).ConfigureAwait(false);
 
         return result?.Url;
     }
@@ -50,19 +51,19 @@ public class SourceChunkUploader
         var chunkId = Guid.NewGuid().ToString();
         var key = $"{SourceId}/{chunkId}.chunk.txt";
 
-        var logPrefix = $"[SourceId {SourceId}] [ChunkId {chunkId}] ";
+        var log = Log.WithPrefix($"[SourceId {SourceId}] [ChunkId {chunkId}] ");
 
-        Logger.LogInformation($"{logPrefix} Waiting to start chunk upload");
+        log.Info($"Waiting to start chunk upload");
 
-        await _uploadConcurrencyLimiter.WaitAsync();
+        await _uploadConcurrencyLimiter.WaitAsync().ConfigureAwait(false);
 
-        Logger.LogInformation($"{logPrefix} Started chunk upload");
+        log.Info($"Started chunk upload");
 
         var bucket = Environment.GetEnvironmentVariable("SOURCE_CHUNKS_BUCKET_NAME");
 
         var isUploaded = false;
 
-        Logger.LogInformation($"{logPrefix} Building put request");
+        log.Info($"Building put request");
 
         var request = new PutObjectRequest
         {
@@ -72,22 +73,21 @@ public class SourceChunkUploader
             ContentType = "text/plain"
         };
 
-        Logger.LogInformation($"{logPrefix} Sending put request");
+        log.Info($"Sending put request");
         try
         {
-            await s_s3.PutObjectAsync(request);
+            await s_s3.PutObjectAsync(request).ConfigureAwait(false);
             isUploaded = true;
-            Logger.LogInformation($"{logPrefix}");
+            log.Info($"Uploaded");
         }
         catch (Exception ex)
         {
-            Logger.LogError($"{logPrefix} Put request failed!");
-            Logger.LogError($"{logPrefix} {ex.Message}");
+            log.Error($"Put request failed: {ex.Message}");
         }
 
         _uploadConcurrencyLimiter.Release();
 
-        Logger.LogInformation($"{logPrefix} Finished chunk upload with isUploaded={isUploaded}");
+        log.Info($"Finished chunk upload with isUploaded={isUploaded}");
 
         return new ChunkStatus
         {
@@ -100,20 +100,20 @@ public class SourceChunkUploader
 
     public async Task<ChunkStatus[]> UploadAsync()
     {
-        Logger.LogInformation($"Started upload process for source with ID: {SourceId}");
+        Log.Info($"Started upload process for source with ID: {SourceId}");
 
-        var url = await GetUrlFromSourceId(SourceId);
+        var url = await GetUrlFromSourceIdAsync(SourceId).ConfigureAwait(false);
 
         if (url is null)
         {
-            Logger.LogError($"No URL for source with ID: {SourceId} - cannot continue");
+            Log.Error($"No URL for source with ID: {SourceId} - cannot continue");
             return [];
         }
 
-        using var stream = await s_http.GetStreamAsync(url);
+        using var stream = await s_http.GetStreamAsync(url).ConfigureAwait(false);
         if (stream is null)
         {
-            Logger.LogError($"No download stream for source with ID: {SourceId} - cannot continue");
+            Log.Error($"No download stream for source with ID: {SourceId} - cannot continue");
             return [];
         }
 
@@ -126,7 +126,7 @@ public class SourceChunkUploader
 
         while (!reader.EndOfStream)
         {
-            var line = await reader.ReadLineAsync();
+            var line = await reader.ReadLineAsync().ConfigureAwait(false);
             currentLineCount++;
 
             line = line?.Trim();
@@ -149,9 +149,9 @@ public class SourceChunkUploader
         if (builder.Length > 0)
             uploadTasks.Add(UploadChunkAsync(builder.ToString()));
 
-        Logger.LogInformation($"Waiting for all chunks to finish uploading for source ID {SourceId}");
-        var statuses = await Task.WhenAll(uploadTasks);
-        Logger.LogInformation($"All upload tasks for source ID {SourceId} completed");
+        Log.Info($"Waiting for all chunks to finish uploading for source ID {SourceId}");
+        var statuses = await Task.WhenAll(uploadTasks).ConfigureAwait(false);
+        Log.Info($"All upload tasks for source ID {SourceId} completed");
 
         return statuses.ToArray();
     }

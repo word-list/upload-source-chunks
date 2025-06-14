@@ -1,5 +1,6 @@
 using Amazon.Lambda.Core;
 using Amazon.S3;
+using WordList.Common.Logging;
 
 namespace WordList.Processing.UploadSourceChunks;
 
@@ -10,30 +11,29 @@ public class SourceChunkDeleter
 
     public SourceChunkUploader.ChunkStatus[] ChunkStatuses { get; set; }
 
-    protected ILambdaLogger Logger { get; init; }
+    protected ILogger Log { get; init; }
 
-    public SourceChunkDeleter(SourceChunkUploader.ChunkStatus[] chunkStatuses, ILambdaLogger logger)
+    public SourceChunkDeleter(SourceChunkUploader.ChunkStatus[] chunkStatuses, ILogger logger)
     {
         ChunkStatuses = chunkStatuses;
-        Logger = logger;
+        Log = logger;
     }
 
     public async Task DeleteChunkAsync(SourceChunkUploader.ChunkStatus status)
     {
-        var logPrefix = $"[SourceId {status.SourceId}][ChunkId {status.ChunkId}][Key {status.Key}]";
+        var log = Log.WithPrefix($"[SourceId {status.SourceId}][ChunkId {status.ChunkId}][Key {status.Key}]");
 
-        Logger.LogInformation($"{logPrefix} Waiting to delete");
+        log.Info($"Waiting to delete");
 
-        await _deleteLimiter.WaitAsync();
+        await _deleteLimiter.WaitAsync().ConfigureAwait(false);
 
         try
         {
-            await s_s3.DeleteObjectAsync(Environment.GetEnvironmentVariable("SOURCE_CHUNKS_BUCKET_NAME"), status.Key);
+            await s_s3.DeleteObjectAsync(Environment.GetEnvironmentVariable("SOURCE_CHUNKS_BUCKET_NAME"), status.Key).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            Logger.LogInformation($"{logPrefix} Failed to delete!");
-            Logger.LogInformation($"{logPrefix} {ex.Message}");
+            log.Info($"Failed to delete: {ex.Message}");
         }
 
         _deleteLimiter.Release();
@@ -43,6 +43,6 @@ public class SourceChunkDeleter
     {
         var deleteTasks = ChunkStatuses.Select(s => DeleteChunkAsync(s));
 
-        await Task.WhenAll(deleteTasks);
+        await Task.WhenAll(deleteTasks).ConfigureAwait(false);
     }
 }

@@ -31,3 +31,11 @@ The lambda uses the following environment variables:
 | SOURCES_TABLE_NAME             | Name of the DynamoDB table containing the source definitions. |
 | SOURCE_CHUNKS_BUCKET_NAME      | Name of the bucket the chunks should be copied to.            |
 | PROCESS_SOURCE_CHUNK_QUEUE_URL | Name of the queue to send process chunk messages to.          |
+
+## Common Packages
+
+This project uses the `lib-common` shared library which is published on GitHub.  To be able to import it, you'll need to use the following command:
+
+```
+dotnet nuget add source --username <your-username> --password <github-PAT> --store-password-in-clear-text --name github "https://nuget.pkg.github.com/word-list/index.json"
+```
