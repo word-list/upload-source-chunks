@@ -7,6 +7,8 @@ using System.Text.Json.Serialization;
 using WordList.Processing.UploadSourceChunks.Models;
 using WordList.Common.Messaging;
 using WordList.Common.Messaging.Messages;
+using WordList.Common.Status;
+using WordList.Common.Status.Models;
 
 namespace WordList.Processing.UploadSourceChunks;
 
@@ -30,26 +32,35 @@ public class Function
         {
             if (message is null) continue;
 
+            var status = new StatusClient(message.CorrelationId);
+
             log.Info($"Starting source upload for {message.SourceId}");
-            var chunkStatuses = await new SourceChunkUploader(message.SourceId, message.ReplaceExistingWords, log).UploadAsync();
+            var correlationId = await status.CreateStatusAsync(message.SourceId).ConfigureAwait(false);
+
+            var chunkStatuses = await new SourceChunkUploader(message.SourceId, message.ReplaceExistingWords, status, log).UploadAsync().ConfigureAwait(false);
             log.Info($"Retrieved statuses for {chunkStatuses.Length} chunk(s)");
+
+            await status.UpdateTotalChunksAsync(chunkStatuses.Length).ConfigureAwait(false);
+            await status.UpdateStatusAsync(SourceStatus.CHUNKING).ConfigureAwait(false);
 
             if (!chunkStatuses.All(s => s.IsUploaded))
             {
                 log.Info($"At least one chunk failed to upload, aborting");
-                await new SourceChunkDeleter(chunkStatuses, log).DeleteAllChunksAsync();
+                await new SourceChunkDeleter(chunkStatuses, log).DeleteAllChunksAsync().ConfigureAwait(false);
+                await status.UpdateStatusAsync(SourceStatus.FAILED).ConfigureAwait(false);
             }
             else
             {
                 await MessageQueues.ProcessSourceChunk.SendBatchedMessagesAsync(
-                    log,
-                    chunkStatuses.Select(status => new ProcessSourceChunkMessage
-                    {
-                        SourceId = status.SourceId,
-                        ChunkId = status.ChunkId,
-                        Key = status.Key
-                    })
-                );
+                     log,
+                     chunkStatuses.Select(status => new ProcessSourceChunkMessage
+                     {
+                         CorrelationId = message.CorrelationId,
+                         SourceId = status.SourceId,
+                         ChunkId = status.ChunkId,
+                         Key = status.Key
+                     })
+                 ).ConfigureAwait(false);
             }
         }
 

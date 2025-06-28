@@ -4,6 +4,7 @@ using Amazon.Lambda.Core;
 using Amazon.S3;
 using Amazon.S3.Model;
 using WordList.Common.Logging;
+using WordList.Common.Status;
 using WordList.Processing.UploadSourceChunks.Models;
 
 namespace WordList.Processing.UploadSourceChunks;
@@ -19,6 +20,8 @@ public class SourceChunkUploader
     public int ChunkLineCount { get; set; }
     public bool ReplaceExistingWords { get; init; }
 
+    public StatusClient Status { get; init; }
+
     public record struct ChunkStatus
     {
         public string SourceId { get; set; }
@@ -30,12 +33,13 @@ public class SourceChunkUploader
     // Limit max number of uploads.
     private SemaphoreSlim _uploadConcurrencyLimiter = new(3);
 
-    public SourceChunkUploader(string sourceId, bool replaceExistingWords, ILogger logger)
+    public SourceChunkUploader(string sourceId, bool replaceExistingWords, StatusClient status, ILogger logger)
     {
         SourceId = sourceId;
         Log = logger;
         ChunkLineCount = 2_500;
         ReplaceExistingWords = replaceExistingWords;
+        Status = status;
     }
 
     protected static async Task<string?> GetUrlFromSourceIdAsync(string sourceId)
@@ -88,6 +92,8 @@ public class SourceChunkUploader
         _uploadConcurrencyLimiter.Release();
 
         log.Info($"Finished chunk upload with isUploaded={isUploaded}");
+
+        await Status.IncreaseProcessedChunksAsync(1).ConfigureAwait(false);
 
         return new ChunkStatus
         {
